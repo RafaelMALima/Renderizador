@@ -1,8 +1,8 @@
 
-#!/usr/bin/env python3
-# -*- coding: UTF-8 -*-
+    #!/usr/bin/env python3
+    # -*- coding: UTF-8 -*-
 
-# pylint: disable=invalid-name
+    # pylint: disable=invalid-name
 
 """
 Biblioteca Gráfica / Graphics Library.
@@ -32,7 +32,7 @@ class GL:
 
     screen_matrix = []
     z_buffer = [[0]*width]*height
-    supersampling_buffer = [[0]*width*2]*height*2
+    supersampling_buffer = np.zeros((1,1,3), dtype=np.uint8)
 
 
 
@@ -47,6 +47,8 @@ class GL:
                      [0,-GL.height/2,0,GL.height/2],
                      [0,0,1,0],
                      [0,0,0,1]])
+
+        GL.supersampling_buffer = np.zeros((GL.width*2, GL.height*2, 3), dtype=np.uint8)
 
 
     @staticmethod
@@ -132,7 +134,7 @@ class GL:
             if len(tri) != 6:
                 return
 
-            # Extrair as coordenadas dos vértices do triângulo
+            # Extrair as coordenadas dos vértices do triângulo no espaço da tela
             p1 = [tri[0], tri[1]]
             p2 = [tri[2], tri[3]]
             p3 = [tri[4], tri[5]]
@@ -140,31 +142,47 @@ class GL:
             xs = [p1[0], p2[0], p3[0]]
             ys = [p1[1], p2[1], p3[1]]
 
-            # Calcular a caixa delimitadora (bounding box) do triângulo
+            # Calcular a caixa delimitadora (bounding box) do triângulo para a 
             min_x = int(min(xs))
             max_x = int(max(xs))
             min_y = int(min(ys))
             max_y = int(max(ys))
 
+            #screenspace
+            bounding_box = [min_x, max_x, min_y, max_y]
+
+
+            #supersampling space
+            s_p1 = [tri[0]*2, tri[1]*2]
+            s_p2 = [tri[2]*2, tri[3]*2]
+            s_p3 = [tri[4]*2, tri[5]*2]
+
+            s_bounding_box = [2*c for c in bounding_box]
+
             # Iterar sobre cada pixel dentro da bounding box
-            for x in range(min_x, max_x + 1):
-                for y in range(min_y, max_y + 1):
+            for x in range(s_bounding_box[0], s_bounding_box[1] + 1):
+                for y in range(s_bounding_box[2], s_bounding_box[3] + 1):
                     # Coordenadas do ponto central do pixel
-                    px = x + 0.5
-                    py = y + 0.5
+                    s_px = x + 0.5
+                    s_py = y + 0.5
 
                     # Cálculo das funções de linha para cada aresta do triângulo
-                    L1 = (p2[1] - p1[1]) * px - (p2[0] - p1[0]) * py + p1[1] * (p2[0] - p1[0]) - p1[0] * (p2[1] - p1[1])
-                    L2 = (p3[1] - p2[1]) * px - (p3[0] - p2[0]) * py + p2[1] * (p3[0] - p2[0]) - p2[0] * (p3[1] - p2[1])
-                    L3 = (p1[1] - p3[1]) * px - (p1[0] - p3[0]) * py + p3[1] * (p1[0] - p3[0]) - p3[0] * (p1[1] - p3[1])
+                    L1 = (s_p2[1] - s_p1[1]) * s_px - (s_p2[0] - s_p1[0]) * s_py + s_p1[1] * (s_p2[0] - s_p1[0]) - s_p1[0] * (s_p2[1] - s_p1[1])
+                    L2 = (s_p3[1] - s_p2[1]) * s_px - (s_p3[0] - s_p2[0]) * s_py + s_p2[1] * (s_p3[0] - s_p2[0]) - s_p2[0] * (s_p3[1] - s_p2[1])
+                    L3 = (s_p1[1] - s_p3[1]) * s_px - (s_p1[0] - s_p3[0]) * s_py + s_p3[1] * (s_p1[0] - s_p3[0]) - s_p3[0] * (s_p1[1] - s_p3[1])
 
                     # Verificar se o ponto está dentro do triângulo
                     if (L1 >= 0 and L2 >= 0 and L3 >= 0) or (L1 <= 0 and L2 <= 0 and L3 <= 0):
-                        if 0 <= x < GL.width and 0 <= y < GL.height:
+                        if 0 <= x < GL.width*2 and 0 <= y < GL.height*2:
                             # Aqui você pode adicionar interpolação de cores ou texturas se necessário
-                            gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, color)
+                            #gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, color)
+                            GL.supersampling_buffer[x][y] = color
 
-
+            for x in range(bounding_box[0], bounding_box[1] + 1):
+                for y in range(bounding_box[2], bounding_box[3] + 1):
+                    sub_pixels = GL.supersampling_buffer[2*x:2*x+2, 2*y:2*y+2]
+                    super_colors = sub_pixels.mean(axis=(0, 1)).astype(np.uint8)
+                    gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, super_colors)
 
     @staticmethod
     def triangleSet(point, colors):
