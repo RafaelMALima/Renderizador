@@ -1,8 +1,7 @@
+#!/usr/bin/env python3
+# -*- coding: UTF-8 -*-
 
-    #!/usr/bin/env python3
-    # -*- coding: UTF-8 -*-
-
-    # pylint: disable=invalid-name
+# pylint: disable=invalid-name
 
 """
 Biblioteca Gráfica / Graphics Library.
@@ -19,6 +18,28 @@ import gpu          # Simula os recursos de uma GPU
 import math         # Funções matemáticas
 import numpy as np  # Biblioteca do Numpy
 
+
+## agradecimentos especiais a pedro barao por me forneces essa merda
+def t_area(p0,p1,p2):
+    x1,y1 = p0
+    x2,y2 = p1
+    x3,y3 = p2
+    return 0.5*(x1*(y2-y3)+x2*(y3-y1)+x3*(y1-y2))
+
+def t_bar_coords(p0, p1, p2, p):
+        x0, y0 = p0
+        x1, y1 = p1
+        x2, y2 = p2
+        x, y = p
+        a_total = t_area([x0, y0], [x1, y1], [x2, y2])
+        a0 = t_area([x1, y1], [x2, y2], [x, y])
+        a1 = t_area([x2, y2], [x0, y0], [x, y])
+        a2 = t_area([x0, y0], [x1, y1], [x, y])
+        alpha = abs(a0 / a_total)
+        beta = abs(a1 / a_total)
+        gamma = abs(a2 / a_total)
+        return alpha,beta,gamma
+
 class GL:
     """Classe que representa a biblioteca gráfica (Graphics Library)."""
 
@@ -33,6 +54,7 @@ class GL:
     screen_matrix = []
     z_buffer = [[0]*width]*height
     supersampling_buffer = np.zeros((1,1,3), dtype=np.uint8)
+    z_buffer = np.array(np.inf)
 
 
 
@@ -49,6 +71,7 @@ class GL:
                      [0,0,0,1]])
 
         GL.supersampling_buffer = np.zeros((GL.width*2, GL.height*2, 3), dtype=np.uint8)
+        GL.z_buffer = - np.inf * np.ones((GL.width*2, GL.height*2))
 
 
     @staticmethod
@@ -119,17 +142,23 @@ class GL:
 
 
     @staticmethod
-    def triangleSet2D(vertices, colors):
+    def triangleSet2D(vertices, colors, z_vals = None, colorPerVertex = False, vertexColors = None):
         """Função usada para renderizar TriangleSet2D."""
 
         if len(vertices) < 5:
             print("ERROR NO TRIANGLES SENT")
             return
 
+
         color = np.array(colors["emissiveColor"]) * 255
 
+        z_index = 0
         for i in range(0, len(vertices), 6):
             tri = vertices[i: i + 6]
+
+            z_val = None
+            if z_vals is not None:
+                z_val = z_vals[i//2:i//2+3]
 
             if len(tri) != 6:
                 return
@@ -159,6 +188,10 @@ class GL:
 
             s_bounding_box = [2*c for c in bounding_box]
 
+            z1, z2, z3 = [0,0,0]
+            if z_vals is not None:
+                z1, z2, z3 = z_vals[z_index:z_index+3]
+
             # Iterar sobre cada pixel dentro da bounding box
             for x in range(s_bounding_box[0], s_bounding_box[1] + 1):
                 for y in range(s_bounding_box[2], s_bounding_box[3] + 1):
@@ -174,8 +207,32 @@ class GL:
                     # Verificar se o ponto está dentro do triângulo
                     if (L1 >= 0 and L2 >= 0 and L3 >= 0) or (L1 <= 0 and L2 <= 0 and L3 <= 0):
                         if 0 <= x < GL.width*2 and 0 <= y < GL.height*2:
-                            # Aqui você pode adicionar interpolação de cores ou texturas se necessário
-                            #gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, color)
+                            alpha, beta, gamma = t_bar_coords(s_p1, s_p2, s_p3, [s_px, s_py])
+                            if alpha < 0 or beta < 0 or gamma < 0:
+                                continue
+
+                            z = 1/(alpha * z1 + beta * z2 + gamma * z3)
+
+                            """
+                            if z > GL.z_buffer[x][y]:
+                                one_over_z = alpha * one_over_z1 + beta * one_over_z2 + gamma * one_over_z3
+                                if one_over_z == 0:
+                                    continue  # Avoid division by zero
+
+                                r = vertexColors[3*i][0] * alpha + vertexColors[3*i+1][0] * beta + vertexColors[3*i+2][0] * gamma
+                                g = vertexColors[3*i][1] * alpha + vertexColors[3*i+1][1] * beta + vertexColors[3*i+2][1] * gamma
+                                b = vertexColors[3*i][2] * alpha + vertexColors[3*i+1][2] * beta + vertexColors[3*i+2][2] * gamma
+                                cr = z * r/z_val[0]
+                                cg = z * g/z_val[1]
+                                cb = z * b/z_val[2]
+                                color = [int(cr), int(cg), int(cb)]
+                            """
+                            if z > GL.z_buffer[x][y]:
+                                GL.z_buffer[x][y] = z
+                            else:
+                                #skip subpixel if not ahead of z buffer
+                                continue
+
                             GL.supersampling_buffer[x][y] = color
 
             for x in range(bounding_box[0], bounding_box[1] + 1):
@@ -184,8 +241,10 @@ class GL:
                     super_colors = sub_pixels.mean(axis=(0, 1)).astype(np.uint8)
                     gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, super_colors)
 
+            z_index += 3
+
     @staticmethod
-    def triangleSet(point, colors):
+    def triangleSet(point, colors, colorPerVertex = False, vertexColors = None):
         """Função usada para renderizar TriangleSet."""
 
         for i in range(len(point) // 9):
@@ -227,7 +286,7 @@ class GL:
                                 triangle_array[0][2],
                                 triangle_array[1][2]]
 
-            GL.triangleSet2D(triangle_points, colors)
+            GL.triangleSet2D(triangle_points, colors, colorPerVertex=colorPerVertex, vertexColors=vertexColors)
 
     @staticmethod
     def viewpoint(position, orientation, fieldOfView):
@@ -322,7 +381,7 @@ class GL:
         GL.triangleSet(vertices, colors)
 
     @staticmethod
-    def indexedTriangleStripSet(point, index, colors):
+    def indexedTriangleStripSet(point, index, colors, color_index=None):
         """Função usada para renderizar IndexedTriangleStripSet."""
         strips = []
         current_strip = []
