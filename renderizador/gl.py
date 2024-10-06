@@ -188,7 +188,7 @@ class GL:
 
             s_bounding_box = [2*c for c in bounding_box]
 
-            z1, z2, z3 = [0,0,0]
+            z1, z2, z3 = [1,1,1]
             if z_vals is not None:
                 z1, z2, z3 = z_vals[z_index:z_index+3]
 
@@ -252,6 +252,7 @@ class GL:
             p_a : list[float] = [p[0], p[1], p[2]]
             p_b : list[float] = [p[3], p[4], p[5]]
             p_c : list[float] = [p[6], p[7], p[8]] 
+            z_vals = [p[2], p[5], p[8]]
 
             triangle_matrix_no_transform = np.array([
                     [p_a[0], p_b[0], p_c[0]],
@@ -286,7 +287,7 @@ class GL:
                                 triangle_array[0][2],
                                 triangle_array[1][2]]
 
-            GL.triangleSet2D(triangle_points, colors, colorPerVertex=colorPerVertex, vertexColors=vertexColors)
+            GL.triangleSet2D(triangle_points, colors, colorPerVertex=colorPerVertex, vertexColors=vertexColors, z_vals=z_vals)
 
     @staticmethod
     def viewpoint(position, orientation, fieldOfView):
