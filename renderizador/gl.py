@@ -145,6 +145,8 @@ class GL:
     def triangleSet2D(vertices, colors, z_vals = None, colorPerVertex = False, vertexColors = None):
         """Função usada para renderizar TriangleSet2D."""
 
+
+        print(z_vals)
         if len(vertices) < 5:
             print("ERROR NO TRIANGLES SENT")
             return
@@ -213,27 +215,33 @@ class GL:
 
                             z = 1/(alpha * z1 + beta * z2 + gamma * z3)
 
-                            """
-                            if z > GL.z_buffer[x][y]:
-                                one_over_z = alpha * one_over_z1 + beta * one_over_z2 + gamma * one_over_z3
-                                if one_over_z == 0:
-                                    continue  # Avoid division by zero
-
-                                r = vertexColors[3*i][0] * alpha + vertexColors[3*i+1][0] * beta + vertexColors[3*i+2][0] * gamma
-                                g = vertexColors[3*i][1] * alpha + vertexColors[3*i+1][1] * beta + vertexColors[3*i+2][1] * gamma
-                                b = vertexColors[3*i][2] * alpha + vertexColors[3*i+1][2] * beta + vertexColors[3*i+2][2] * gamma
-                                cr = z * r/z_val[0]
-                                cg = z * g/z_val[1]
-                                cb = z * b/z_val[2]
-                                color = [int(cr), int(cg), int(cb)]
-                            """
                             if z > GL.z_buffer[x][y]:
                                 GL.z_buffer[x][y] = z
                             else:
                                 #skip subpixel if not ahead of z buffer
                                 continue
 
-                            GL.supersampling_buffer[x][y] = color
+                            if vertexColors is not None and z_vals is not None:
+                                # Avoid division by zero
+                                inv_z1 = 1.0 / z1 if z1 != 0 else 0.0
+                                inv_z2 = 1.0 / z2 if z2 != 0 else 0.0
+                                inv_z3 = 1.0 / z3 if z3 != 0 else 0.0
+
+                                one_over_z = alpha * inv_z1 + beta * inv_z2 + gamma * inv_z3
+                                if one_over_z == 0:
+                                    continue  # Skip this pixel to avoid division by zero
+
+                                # Interpolate color components with perspective correction
+                                r = (alpha * vertexColors[0][0] * inv_z1 + beta * vertexColors[1][0] * inv_z2 + gamma * vertexColors[2][0] * inv_z3) / one_over_z
+                                g = (alpha * vertexColors[0][1] * inv_z1 + beta * vertexColors[1][1] * inv_z2 + gamma * vertexColors[2][1] * inv_z3) / one_over_z
+                                b = (alpha * vertexColors[0][2] * inv_z1 + beta * vertexColors[1][2] * inv_z2 + gamma * vertexColors[2][2] * inv_z3) / one_over_z
+
+                                pixel_color = np.array([r, g, b])
+                                pixel_color = np.clip(pixel_color, 0, 255).astype(np.uint8)
+                                GL.supersampling_buffer[x][y] = pixel_color
+                            else:
+                                GL.supersampling_buffer[x][y] = color
+
 
             for x in range(bounding_box[0], bounding_box[1] + 1):
                 for y in range(bounding_box[2], bounding_box[3] + 1):
@@ -244,71 +252,81 @@ class GL:
             z_index += 3
 
     @staticmethod
-    def triangleSet(point, colors, colorPerVertex = False, vertexColors = None):
-        """Função usada para renderizar TriangleSet."""
+    def triangleSet(point, colors, colorPerVertex=False, vertexColors=None):
+        """Function to render TriangleSet."""
 
         for i in range(len(point) // 9):
             p = point[i*9:i*9+9]
-            p_a : list[float] = [p[0], p[1], p[2]]
-            p_b : list[float] = [p[3], p[4], p[5]]
-            p_c : list[float] = [p[6], p[7], p[8]] 
-            z_vals = [p[2], p[5], p[8]]
+            p_a = [p[0], p[1], p[2]]
+            p_b = [p[3], p[4], p[5]]
+            p_c = [p[6], p[7], p[8]]
 
             triangle_matrix_no_transform = np.array([
-                    [p_a[0], p_b[0], p_c[0]],
-                    [p_a[1], p_b[1], p_c[1]],
-                    [p_a[2], p_b[2], p_c[2]],
-                    [1.,1.,1.]])
+                [p_a[0], p_b[0], p_c[0]],
+                [p_a[1], p_b[1], p_c[1]],
+                [p_a[2], p_b[2], p_c[2]],
+                [1., 1., 1.]])
 
-            #Apply all transforms
+            # Apply all model transformations
             transform_matrix = np.identity(4)
             for matrix in reversed(GL.transform_stack):
                 transform_matrix = matrix @ transform_matrix
 
+            # Transform to world space
             triangle_matrix_worldspace = transform_matrix @ triangle_matrix_no_transform
 
-            camera_transform_matrix = GL.camera_transform_matrix
+            # Apply view (camera) transformation to get view space coordinates
+            look_at_p = GL.view_matrix @ triangle_matrix_worldspace
 
-            triangle_matrix_unnormalized = camera_transform_matrix @ triangle_matrix_worldspace
+            # Extract z-values from the view space coordinates
+            z_vals = look_at_p[2, :].tolist()[0]  # Convert to list
+
+            # Apply projection matrix
+            triangle_matrix_unnormalized = GL.perspective_matrix @ look_at_p
 
             # Perspective divide
-            triangle_matrix = triangle_matrix_unnormalized / triangle_matrix_unnormalized[3,:]
+            triangle_matrix = triangle_matrix_unnormalized / triangle_matrix_unnormalized[3, :]
 
-            screen_matrix = GL.screen_matrix
-
-            triangle_matrix_cameraspace = screen_matrix @ triangle_matrix
+            # Apply screen transformation
+            triangle_matrix_cameraspace = GL.screen_matrix @ triangle_matrix
 
             triangle_array = np.asarray(triangle_matrix_cameraspace)
 
-            triangle_points = [triangle_array[0][0],
-                                triangle_array[1][0],
-                                triangle_array[0][1],
-                                triangle_array[1][1],
-                                triangle_array[0][2],
-                                triangle_array[1][2]]
+            triangle_points = [
+                triangle_array[0][0],
+                triangle_array[1][0],
+                triangle_array[0][1],
+                triangle_array[1][1],
+                triangle_array[0][2],
+                triangle_array[1][2]]
 
-            GL.triangleSet2D(triangle_points, colors, colorPerVertex=colorPerVertex, vertexColors=vertexColors, z_vals=z_vals)
+            tri_vertex_colors = None
+            if colorPerVertex and vertexColors:
+                tri_vertex_colors = vertexColors[i*3:i*3+3]
+            # Pass the z-values to triangleSet2D
+            GL.triangleSet2D(triangle_points, colors, z_vals=z_vals, colorPerVertex=colorPerVertex, vertexColors=tri_vertex_colors)
 
     @staticmethod
     def viewpoint(position, orientation, fieldOfView):
-        """Função usada para renderizar (na verdade coletar os dados) de Viewpoint."""
+        """Function to handle Viewpoint node."""
         GL.position = position
         GL.orientation = orientation
         GL.fov = fieldOfView
 
         camera_translation = np.matrix([
-            [1.,0.,0.,position[0]],
-            [0.,1.,0.,position[1]],
-            [0.,0.,1.,position[2]],
-            [0.,0.,0.,1.],
-            ])
+            [1., 0., 0., position[0]],
+            [0., 1., 0., position[1]],
+            [0., 0., 1., position[2]],
+            [0., 0., 0., 1.],
+        ])
 
         rotation_matrix = GL.calculate_rotation_matrix(orientation[:3], orientation[3])
 
         # Invert the camera transformation to get the view matrix
         view_matrix = np.linalg.inv(camera_translation @ rotation_matrix)
+        GL.view_matrix = view_matrix  # Store the view matrix
 
-        aspect_ratio = GL.width/GL.height
+        aspect_ratio = GL.width / GL.height
         near = GL.near
         far = GL.far
         top = near * np.tan(fieldOfView / 2)
@@ -321,6 +339,9 @@ class GL:
             [0.0, 0.0, -1.0, 0.0],
         ])
 
+        GL.perspective_matrix = perspective_matrix
+
+        # Update camera_transform_matrix if needed
         GL.camera_transform_matrix = perspective_matrix @ view_matrix
 
     @staticmethod
@@ -422,31 +443,57 @@ class GL:
     @staticmethod
     def indexedFaceSet(coord, coordIndex, colorPerVertex, color, colorIndex,
                        texCoord, texCoordIndex, colors, current_texture):
-        """Função usada para renderizar IndexedFaceSet."""
+        """Function used to render IndexedFaceSet."""
+        #modificado pelo GPT. Nao sei porque nao funcionava, nao sei porque funciona. Se der no antiplagio culpe Sam Altman
+        # Process coordIndex into faces
         faces = []
         current_face = []
         for idx in coordIndex:
             if idx == -1:
                 if current_face:
                     faces.append(current_face)
-                    current_face = []
+                current_face = []
             else:
                 current_face.append(idx)
         if current_face:
             faces.append(current_face)
-        
-        # Processar cada face
-        for face in faces:
-            if len(face) < 3:
-                continue  # É necessário pelo menos 3 vértices para formar um polígono
 
-            # Triangularizar a face usando o método de fan (leque)
+        # If colorPerVertex is True and colorIndex is provided, process colorIndex similarly
+        if colorPerVertex and colorIndex:
+            color_faces = []
+            current_color_face = []
+            for idx in colorIndex:
+                if idx == -1:
+                    if current_color_face:
+                        color_faces.append(current_color_face)
+                    current_color_face = []
+                else:
+                    current_color_face.append(idx)
+            if current_color_face:
+                color_faces.append(current_color_face)
+        else:
+            color_faces = None
+
+        # Process each face
+        for face_idx, face in enumerate(faces):
+            if len(face) < 3:
+                continue  # Need at least 3 vertices to form a polygon
+
+            # Get the corresponding color indices for this face
+            if colorPerVertex:
+                if color_faces:
+                    color_face = color_faces[face_idx]
+                else:
+                    # If colorIndex is empty, use coordIndex
+                    color_face = face
+
+            # Triangulate the face using the fan method
             v0 = face[0]
             for i in range(1, len(face) - 1):
                 v1 = face[i]
                 v2 = face[i + 1]
 
-                # Obter as coordenadas dos vértices
+                # Get the coordinates of the vertices
                 coords = []
                 for vi in [v0, v1, v2]:
                     x = coord[3 * vi]
@@ -454,9 +501,24 @@ class GL:
                     z = coord[3 * vi + 2]
                     coords.extend([x, y, z])
 
-                GL.triangleSet(coords, colors)
+                # Handle per-vertex colors
+                if colorPerVertex:
+                    tri_vertex_colors = []
+                    for idx_in_face, vi in enumerate([v0, v1, v2]):
+                        # Get the color index
+                        if color_faces:
+                            # Use the color indices from color_faces
+                            ci = color_face[idx_in_face]
+                        else:
+                            ci = vi  # Use vertex index as color index if colorIndex is empty
 
+                        start = ci * 3
+                        rgb = color[start:start + 3]
+                        tri_vertex_colors.append([int(c * 255) for c in rgb])
 
+                    GL.triangleSet(coords, colors, colorPerVertex=True, vertexColors=tri_vertex_colors)
+                else:
+                    GL.triangleSet(coords, colors)
     @staticmethod
     def sphere(radius, colors):
         """Função usada para renderizar Esferas."""
