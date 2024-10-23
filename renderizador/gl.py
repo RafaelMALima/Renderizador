@@ -90,10 +90,12 @@ def calculate_color(material_emissive_color,
                     point_to_viewer_normalized,
                     shininess):
 
-    light_direction = np.array([-a for a in light_direction])
+    #light_direction = np.array([-a for a in light_direction])
+    normal_direction = np.array([-a for a in normal_direction])
+    power = int(shininess*128)
     ambient = light_ambient_intensity*np.array(material_diffuse_color)*material_ambientIntensity
     diffuse = light_intensity*np.array(material_diffuse_color)*(np.dot(normal_direction,light_direction))
-    specular = light_intensity*np.array(material_specular_color)*((np.dot(normal_direction,((light_direction+point_to_viewer_normalized)/abs(light_direction+point_to_viewer_normalized))))**(shininess*128))
+    specular = light_intensity*np.array(material_specular_color)*((np.dot(normal_direction,((light_direction+point_to_viewer_normalized)/abs(light_direction+point_to_viewer_normalized))))**(power))
     specular = (0.0, 0.0, 0.0)
     #print(material_emissive_color, material_diffuse_color, material_specular_color, material_ambientIntensity)
     #print(ambient, diffuse, specular)
@@ -148,7 +150,7 @@ class GL:
                      [0,0,0,1]])
 
         GL.supersampling_buffer = np.zeros((GL.width*2, GL.height*2, 3), dtype=np.uint8)
-        GL.z_buffer = np.inf * np.ones((GL.width*2, GL.height*2))
+        GL.z_buffer = np.inf*np.ones((GL.width*2, GL.height*2))
         GL.light =  {
             "ambientLight":None,
             "directionalLight":None,
@@ -308,8 +310,8 @@ class GL:
                             if alpha < 0 or beta < 0 or gamma < 0:
                                 continue
 
-                            z = 1/(alpha * z1 + beta * z2 + gamma * z3)
 
+                            z = 1/(alpha * z1 + beta * z2 + gamma * z3)
                             if z < GL.z_buffer[x][y]:
                                 GL.z_buffer[x][y] = z
                             else:
@@ -382,6 +384,7 @@ class GL:
                                         GL.supersampling_buffer[x][y] = color
                                     elif GL.light["directionalLight"]:
                                         point_to_viewer_normalized = barycenter  - GL.position
+                                        GL.supersampling_buffer[x][y] = color
                                         light_direction = GL.light["light_point"] - barycenter
                                         GL.supersampling_buffer[x][y] = [int(a*255) for a in np.array(colors["diffuseColor"])]
                                         color = calculate_color(colors["emissiveColor"],
@@ -399,7 +402,7 @@ class GL:
                                         GL.supersampling_buffer[x][y] = color
                                     normal_color = [int((c + 1)*0.5*255) for c in normals]
                                     #GL.supersampling_buffer[x][y] = normal_color
-                                    GL.supersampling_buffer[x][y] = color
+                                    #GL.supersampling_buffer[x][y] = color
                                 else:
                                     GL.supersampling_buffer[x][y] = color
 
@@ -475,6 +478,9 @@ class GL:
             # Perspective divide
             triangle_matrix = triangle_matrix_unnormalized / triangle_matrix_unnormalized[3, :]
 
+
+            #z_vals = triangle_matrix[2, :].tolist()[0]  # Convert to list
+
             # Apply screen transformation
             triangle_matrix_cameraspace = GL.screen_matrix @ triangle_matrix
 
@@ -499,8 +505,6 @@ class GL:
                 t_c = texCoord[i * 6 + 4:i * 6 + 6]
                 texCoords = [t_a, t_b, t_c]
             # Pass the z-values to triangleSet2D
-
-            
 
             GL.triangleSet2D(triangle_points, colors,barycenter=barycenter, z_vals=z_vals, colorPerVertex=colorPerVertex, vertexColors=tri_vertex_colors, textCoords=texCoords, texture=texture, normals=normals)
 
@@ -688,7 +692,6 @@ class GL:
         # Load the texture image if not already loaded
         if current_texture:
             GL.texture = gpu.GPU.load_texture(current_texture[0])
-            GL.texture_mipmap = generate_mipmap(GL.texture)
         else:
             GL.texture = None
 
@@ -847,6 +850,8 @@ class GL:
     def navigationInfo(headlight):
         """Características físicas do avatar do visualizador e do modelo de visualização."""
         print("NavigationInfo : headlight = {0}".format(headlight)) # imprime no terminal
+        if headlight:
+            GL.directionalLight(0.0, [1, 1, 1], 1, [0, 0, -1])
 
     @staticmethod
     def directionalLight(ambientIntensity, color, intensity, direction):
@@ -887,7 +892,7 @@ class GL:
     def timeSensor(cycleInterval, loop):
 
         GL.supersampling_buffer = np.zeros((GL.width*2, GL.height*2, 3), dtype=np.uint8)
-        GL.z_buffer = np.full((GL.width * 2, GL.height * 2), -np.inf)
+        GL.z_buffer = np.full((GL.width * 2, GL.height * 2), np.inf)
 
         # Esse método já está implementado para os alunos como exemplo
         epoch = (time.time())  # time in seconds since the epoch as a floating point number.
@@ -896,89 +901,54 @@ class GL:
         else:
             relative_time = np.clip(epoch - GL.start_time / cycleInterval, 0, 1)
 
+
+    @staticmethod
     def splinePositionInterpolator(set_fraction, key, keyValue, closed):
         """Interpola não linearmente entre uma lista de vetores 3D."""
-        key = np.array(key)
-        keyValue = np.array(keyValue)
+        # https://www.web3d.org/specifications/X3Dv4/ISO-IEC19775-1v4-IS/Part01/components/interpolators.html#SplinePositionInterpolator
+        # Interpola não linearmente entre uma lista de vetores 3D. O campo keyValue possui
+        # uma lista com os valores a serem interpolados, key possui uma lista respectiva de chaves
+        # dos valores em keyValue, a fração a ser interpolada vem de set_fraction que varia de
+        # zeroa a um. O campo keyValue deve conter exatamente tantos vetores 3D quanto os
+        # quadros-chave no key. O campo closed especifica se o interpolador deve tratar a malha
+        # como fechada, com uma transições da última chave para a primeira chave. Se os keyValues
+        # na primeira e na última chave não forem idênticos, o campo closed será ignorado.
 
-        k_i_before = 0
-        for k_i_before in range(len(key) - 1): # Find the key interval
-            if key[k_i_before] <= set_fraction <= key[k_i_before + 1]:
-                k_i_before = k_i_before
-                k_i_plus = k_i_before + 1
-                break
+        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
+        print("SplinePositionInterpolator : set_fraction = {0}".format(set_fraction))
+        print("SplinePositionInterpolator : key = {0}".format(key)) # imprime no terminal
+        print("SplinePositionInterpolator : keyValue = {0}".format(keyValue))
+        print("SplinePositionInterpolator : closed = {0}".format(closed))
 
-        key_value_parsed = keyValue.reshape(-1, 3)
-        #print(f"SplinePositionInterpolator : key_value_parsed = \n{key_value_parsed}")
-
-        if set_fraction == key[k_i_before]:
-            return key_value_parsed[k_i_before:k_i_before+1]
-        if set_fraction == key[k_i_plus]:
-            return key_value_parsed[k_i_plus:k_i_plus+1]
+        # Abaixo está só um exemplo de como os dados podem ser calculados e transferidos
+        value_changed = [0.0, 0.0, 0.0]
         
-        delta_key = key[k_i_plus] - key[k_i_before]
-        s = (set_fraction - key[k_i_before])/delta_key
-        s_m = np.array([
-            s**3,
-            s**2,
-            s,
-            1
-        ])
-
-        # Handle boundary cases for deriv_0
-        if k_i_before == 0:
-            if closed:
-                deriv_0 = (key_value_parsed[-1] - key_value_parsed[1]) * 0.5
-            else:
-                deriv_0 = np.array([0, 0, 0])
-        else:
-            deriv_0 = (key_value_parsed[k_i_before-1] - key_value_parsed[k_i_before+1]) * 0.5
-
-
-        # Handle boundary cases for delta_value_1
-        if k_i_plus == len(key) - 1:
-            if closed:
-                deriv_1 = (key_value_parsed[0] - key_value_parsed[-2]) * 0.5
-            else:
-                deriv_1 = np.array([0, 0, 0])
-        else:
-            deriv_1 = (key_value_parsed[k_i_plus-1] - key_value_parsed[k_i_plus+1]) * 0.5
-
-        
-
-        c = np.array([
-            key_value_parsed[k_i_before],
-            key_value_parsed[k_i_plus],
-            deriv_0,
-            deriv_1
-        ])
-
-        # print(f"SplinePositionInterpolator : k_i_before = {k_i_before}")
-        # print(f"SplinePositionInterpolator : k_i_plus = {k_i_plus}")
-        # print(f"SplinePositionInterpolator : set_fraction = {set_fraction}")
-        # print(f"SplinePositionInterpolator : key = {key}")
-        # print(f"SplinePositionInterpolator : keyValue = {keyValue}")
-        # print(f"SplinePositionInterpolator : closed = {closed}")
-        # print(f"SplinePositionInterpolator : c = \n{c}")
-
-        # Calcular a interpolação
-        value_changed = s_m @ np.array([
-        [ 2, -2,  1,  1],
-        [-3,  3, -2, -1],
-        [ 0,  0,  1,  0],
-        [ 1,  0,  0,  0]
-    ]) @ c
-
-        #print(f"SplinePositionInterpolator : value_changed = \n{value_changed}")
-
         return value_changed
+
     @staticmethod
     def orientationInterpolator(set_fraction, key, keyValue):
-        """ print(f"OrientationInterpolator : key_value_parsed = \n{key_value_parsed}")
-        print("OrientationInterpolator : set_fraction = {0}".format(set_fraction))
-        print("OrientationInterpolator : key = {0}".format(key))
-        print("OrientationInterpolator : keyValue = {0}".format(keyValue)) """
+        """Interpola entre uma lista de valores de rotação especificos."""
+        # https://www.web3d.org/specifications/X3Dv4/ISO-IEC19775-1v4-IS/Part01/components/interpolators.html#OrientationInterpolator
+        # Interpola rotações são absolutas no espaço do objeto e, portanto, não são cumulativas.
+        # Uma orientação representa a posição final de um objeto após a aplicação de uma rotação.
+        # Um OrientationInterpolator interpola entre duas orientações calculando o caminho mais
+        # curto na esfera unitária entre as duas orientações. A interpolação é linear em
+        # comprimento de arco ao longo deste caminho. Os resultados são indefinidos se as duas
+        # orientações forem diagonalmente opostas. O campo keyValue possui uma lista com os
+        # valores a serem interpolados, key possui uma lista respectiva de chaves
+        # dos valores em keyValue, a fração a ser interpolada vem de set_fraction que varia de
+        # zeroa a um. O campo keyValue deve conter exatamente tantas rotações 3D quanto os
+        # quadros-chave no key.
 
+        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
+        print("OrientationInterpolator : set_fraction = {0}".format(set_fraction))
+        print("OrientationInterpolator : key = {0}".format(key)) # imprime no terminal
+        print("OrientationInterpolator : keyValue = {0}".format(keyValue))
+
+        # Abaixo está só um exemplo de como os dados podem ser calculados e transferidos
+        value_changed = [0, 0, 1, 0]
+
+        return value_changed
     def vertex_shader(self, shader):
         """Para no futuro implementar um vertex shader."""
 
