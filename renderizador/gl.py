@@ -40,6 +40,67 @@ def t_bar_coords(p0, p1, p2, p):
         gamma = abs(a2 / a_total)
         return alpha,beta,gamma
 
+#GPT pq preguiça
+def calculate_triangle_normal(v0, v1, v2):
+    """
+    Calculate the normal vector of a triangle defined by vertices v0, v1, and v2.
+
+    Parameters:
+    v0, v1, v2 : array-like
+        The coordinates of the triangle's vertices. Each can be a list, tuple, or NumPy array with three elements.
+
+    Returns:
+    normal : ndarray
+        A unit normal vector perpendicular to the plane of the triangle.
+    """
+    # Convert vertices to NumPy arrays
+    v0 = np.array(v0, dtype=float)
+    v1 = np.array(v1, dtype=float)
+    v2 = np.array(v2, dtype=float)
+
+    # Compute edge vectors
+    edge1 = v1 - v0
+    edge2 = v2 - v0
+
+    # Compute the cross product of the edge vectors
+    normal = np.cross(edge1, edge2)
+
+    # Normalize the normal vector
+    norm = np.linalg.norm(normal)
+    if norm != 0:
+        normal = normal / norm
+    else:
+        # Handle degenerate triangle (zero area)
+        normal = np.array([0.0, 0.0, 0.0])
+
+    if normal is list[list]:
+        return normal[0]
+    else:
+        return normal
+
+def calculate_color(material_emissive_color,
+                    material_diffuse_color,
+                    material_specular_color,
+                    material_ambientIntensity,
+                    light_color,
+                    light_intensity,
+                    light_ambient_intensity,
+                    light_direction,
+                    normal_direction,
+                    point_to_viewer_normalized,
+                    shininess):
+
+    light_direction = np.array([-a for a in light_direction])
+    ambient = light_ambient_intensity*np.array(material_diffuse_color)*material_ambientIntensity
+    diffuse = light_intensity*np.array(material_diffuse_color)*(np.dot(normal_direction,light_direction))
+    specular = light_intensity*np.array(material_specular_color)*((np.dot(normal_direction,((light_direction+point_to_viewer_normalized)/abs(light_direction+point_to_viewer_normalized))))**(shininess*128))
+    specular = (0.0, 0.0, 0.0)
+    #print(material_emissive_color, material_diffuse_color, material_specular_color, material_ambientIntensity)
+    #print(ambient, diffuse, specular)
+    I_rgb = np.array(material_emissive_color) + light_color*(ambient + diffuse + specular)
+    #print(I_rgb)
+    return np.clip(I_rgb*256,0,255)
+
 class GL:
     """Classe que representa a biblioteca gráfica (Graphics Library)."""
 
@@ -48,13 +109,29 @@ class GL:
     near = 0.01   # plano de corte próximo
     far = 1000    # plano de corte distante
 
+    start_time = 0
+
     camera_transform_matrix = []
     transform_stack : list[NDArray] = []
+    normals_transform_stack : list[NDArray] = []
 
     screen_matrix = []
     z_buffer = [[0]*width]*height
     supersampling_buffer = np.zeros((1,1,3), dtype=np.uint8)
     z_buffer = np.array(np.inf)
+
+    texture = None
+    texture_mipmap = []
+
+    light: dict = {
+             "ambientLight":None,
+             "directionalLight":None,
+             "light_color": None,
+             "light_intensity":None,
+             "light_ambient_intensity":None,
+             "light_point":None,
+             "light_direction":None
+         }
 
 
 
@@ -71,7 +148,15 @@ class GL:
                      [0,0,0,1]])
 
         GL.supersampling_buffer = np.zeros((GL.width*2, GL.height*2, 3), dtype=np.uint8)
-        GL.z_buffer = - np.inf * np.ones((GL.width*2, GL.height*2))
+        GL.z_buffer = np.inf * np.ones((GL.width*2, GL.height*2))
+        GL.light =  {
+            "ambientLight":None,
+            "directionalLight":None,
+            "light_color": None,
+            "light_intensity":None,
+            "light_ambient_intensity":None,
+            "light_point":None
+        }
 
 
     @staticmethod
@@ -142,15 +227,25 @@ class GL:
 
 
     @staticmethod
-    def triangleSet2D(vertices, colors, z_vals = None, colorPerVertex = False, vertexColors = None):
+    def triangleSet2D(vertices, colors, barycenter = None, z_vals = None, colorPerVertex = False, vertexColors = None,
+                      textCoords = None, texture = None, normals = None):
         """Função usada para renderizar TriangleSet2D."""
 
 
-        print(z_vals)
+        #print(z_vals)
         if len(vertices) < 5:
             print("ERROR NO TRIANGLES SENT")
             return
 
+        #print(textCoords)
+        has_texture = False
+        if textCoords is not None and texture is not None:
+            has_texture = True
+            # Extract texture coordinates for each vertex
+            t1 = textCoords[0]
+            t2 = textCoords[1]
+            t3 = textCoords[2]
+            texture_image = texture
 
         color = np.array(colors["emissiveColor"]) * 255
 
@@ -215,44 +310,112 @@ class GL:
 
                             z = 1/(alpha * z1 + beta * z2 + gamma * z3)
 
-                            if z > GL.z_buffer[x][y]:
+                            if z < GL.z_buffer[x][y]:
                                 GL.z_buffer[x][y] = z
                             else:
                                 #skip subpixel if not ahead of z buffer
                                 continue
 
-                            if vertexColors is not None and z_vals is not None:
-                                # Avoid division by zero
-                                inv_z1 = 1.0 / z1 if z1 != 0 else 0.0
-                                inv_z2 = 1.0 / z2 if z2 != 0 else 0.0
-                                inv_z3 = 1.0 / z3 if z3 != 0 else 0.0
+                            # Avoid division by zero
+                            inv_z1 = 1.0 / z1 if z1 != 0 else 0.0
+                            inv_z2 = 1.0 / z2 if z2 != 0 else 0.0
+                            inv_z3 = 1.0 / z3 if z3 != 0 else 0.0
 
-                                one_over_z = alpha * inv_z1 + beta * inv_z2 + gamma * inv_z3
-                                if one_over_z == 0:
+                            if vertexColors is not None and z_vals is not None:
+                                inv_z = alpha * inv_z1 + beta * inv_z2 + gamma * inv_z3
+                                if inv_z == 0:
                                     continue  # Skip this pixel to avoid division by zero
 
                                 # Interpolate color components with perspective correction
-                                r = (alpha * vertexColors[0][0] * inv_z1 + beta * vertexColors[1][0] * inv_z2 + gamma * vertexColors[2][0] * inv_z3) / one_over_z
-                                g = (alpha * vertexColors[0][1] * inv_z1 + beta * vertexColors[1][1] * inv_z2 + gamma * vertexColors[2][1] * inv_z3) / one_over_z
-                                b = (alpha * vertexColors[0][2] * inv_z1 + beta * vertexColors[1][2] * inv_z2 + gamma * vertexColors[2][2] * inv_z3) / one_over_z
+                                r = (alpha * vertexColors[0][0] * inv_z1 + beta * vertexColors[1][0] * inv_z2 + gamma * vertexColors[2][0] * inv_z3) / inv_z
+                                g = (alpha * vertexColors[0][1] * inv_z1 + beta * vertexColors[1][1] * inv_z2 + gamma * vertexColors[2][1] * inv_z3) / inv_z
+                                b = (alpha * vertexColors[0][2] * inv_z1 + beta * vertexColors[1][2] * inv_z2 + gamma * vertexColors[2][2] * inv_z3) / inv_z
 
                                 pixel_color = np.array([r, g, b])
                                 pixel_color = np.clip(pixel_color, 0, 255).astype(np.uint8)
                                 GL.supersampling_buffer[x][y] = pixel_color
                             else:
-                                GL.supersampling_buffer[x][y] = color
+                                if normals is not None:
+                                    #Calculate light direction
+                                    """
+                                    GL.Light = {
+                                     "ambientLight":None,
+                                     "directionalLight":None,
+                                     "light_color": None,
+                                     "light_intensity":None,
+                                     "light_ambient_intensity":None,
+                                     "light_point":None,
+                                     "light_direction":None
+                                    }
+                                    def calculate_color(material_emissive_color,
+                                                        material_diffuse_color,
+                                                        material_specular_color,
+                                                        material_ambientIntensity,
+                                                        light_color,
+                                                        light_intensity,
+                                                        light_ambient_intensity,
+                                                        light_direction,
+                                                        normal_direction,
+                                                        point_to_viewer_normalized,
+                                                        shininess):
+                                    """
+                                    point_to_viewer = barycenter  - GL.position
+                                    point_to_viewer_normalized= np.linalg.norm(point_to_viewer)
+                                    if point_to_viewer_normalized!= 0:
+                                        point_to_viewer = point_to_viewer / point_to_viewer_normalized
+                                    else:
+                                        # Handle degenerate triangle (zero area)
+                                        normal = np.array([0.0, 0.0, 0.0])
+                                    if GL.light["ambientLight"]:
+                                        light_direction = GL.light["light_direction"]
+                                        color = calculate_color(colors["emissiveColor"],
+                                                        colors["diffuseColor"],
+                                                        colors["specularColor"],
+                                                        GL.light["light_ambient_intensity"],                                                        GL.light["light_color"],
+                                                        GL.light["light_intensity"],
+                                                        GL.light["light_ambient_intensity"],
+                                                        light_direction,
+                                                        normals,
+                                                        point_to_viewer_normalized,
+                                                        colors["shininess"]
+                                                        )
+                                        GL.supersampling_buffer[x][y] = color
+                                    elif GL.light["directionalLight"]:
+                                        point_to_viewer_normalized = barycenter  - GL.position
+                                        light_direction = GL.light["light_point"] - barycenter
+                                        GL.supersampling_buffer[x][y] = [int(a*255) for a in np.array(colors["diffuseColor"])]
+                                        color = calculate_color(colors["emissiveColor"],
+                                                        colors["diffuseColor"],
+                                                        colors["specularColor"],
+                                                        GL.light["light_ambient_intensity"],
+                                                        GL.light["light_color"],
+                                                        GL.light["light_intensity"],
+                                                        GL.light["light_ambient_intensity"],
+                                                        light_direction,
+                                                        normals,
+                                                        point_to_viewer_normalized,
+                                                        colors["shininess"]
+                                                        )
+                                        GL.supersampling_buffer[x][y] = color
+                                    normal_color = [int((c + 1)*0.5*255) for c in normals]
+                                    #GL.supersampling_buffer[x][y] = normal_color
+                                    GL.supersampling_buffer[x][y] = color
+                                else:
+                                    GL.supersampling_buffer[x][y] = color
 
 
             for x in range(bounding_box[0], bounding_box[1] + 1):
                 for y in range(bounding_box[2], bounding_box[3] + 1):
                     sub_pixels = GL.supersampling_buffer[2*x:2*x+2, 2*y:2*y+2]
+                    #if (x,y) == (44,47):
+                        #print(f"sub_pixels{sub_pixels}")
                     super_colors = sub_pixels.mean(axis=(0, 1)).astype(np.uint8)
                     gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, super_colors)
 
             z_index += 3
 
     @staticmethod
-    def triangleSet(point, colors, colorPerVertex=False, vertexColors=None):
+    def triangleSet(point, colors, colorPerVertex=False, vertexColors=None, texCoord=None, texture=None):
         """Function to render TriangleSet."""
 
         for i in range(len(point) // 9):
@@ -267,13 +430,38 @@ class GL:
                 [p_a[2], p_b[2], p_c[2]],
                 [1., 1., 1.]])
 
+
             # Apply all model transformations
             transform_matrix = np.identity(4)
             for matrix in reversed(GL.transform_stack):
                 transform_matrix = matrix @ transform_matrix
 
+            """
+            normal_transforms = np.identity(4)
+            for matrix in reversed(GL.normals_transform_stack):
+                normals_transforms = normals @ matrix
+
+            # normal in world space
+            n_to_world = multiply_mats(GL.normal_transform_stack)
+            n = ns[i]
+            n.append(1.0)
+            world_n = np.array(n)
+            world_n = n_to_world @ world_n
+            """
+
+
             # Transform to world space
             triangle_matrix_worldspace = transform_matrix @ triangle_matrix_no_transform
+
+            #worldspace vertices after transform
+            v0 = [triangle_matrix_worldspace[0,0], triangle_matrix_worldspace[1,0], triangle_matrix_worldspace[2,0]]
+            v1 = [triangle_matrix_worldspace[0,1], triangle_matrix_worldspace[1,1], triangle_matrix_worldspace[2,1]]
+            v2 = [triangle_matrix_worldspace[0,2], triangle_matrix_worldspace[1,2], triangle_matrix_worldspace[2,2]]
+            #barycenter for point in worldspace to cameraspace
+            barycenter = (np.array(v0)+np.array(v1)+np.array(v2)) / 3
+
+            #normals
+            normals = calculate_triangle_normal(v0, v1, v2)
 
             # Apply view (camera) transformation to get view space coordinates
             look_at_p = GL.view_matrix @ triangle_matrix_worldspace
@@ -303,8 +491,18 @@ class GL:
             tri_vertex_colors = None
             if colorPerVertex and vertexColors:
                 tri_vertex_colors = vertexColors[i*3:i*3+3]
+
+            texCoords=None
+            if texCoord is not None:
+                t_a = texCoord[i * 6:i * 6 + 2]
+                t_b = texCoord[i * 6 + 2:i * 6 + 4]
+                t_c = texCoord[i * 6 + 4:i * 6 + 6]
+                texCoords = [t_a, t_b, t_c]
             # Pass the z-values to triangleSet2D
-            GL.triangleSet2D(triangle_points, colors, z_vals=z_vals, colorPerVertex=colorPerVertex, vertexColors=tri_vertex_colors)
+
+            
+
+            GL.triangleSet2D(triangle_points, colors,barycenter=barycenter, z_vals=z_vals, colorPerVertex=colorPerVertex, vertexColors=tri_vertex_colors, textCoords=texCoords, texture=texture, normals=normals)
 
     @staticmethod
     def viewpoint(position, orientation, fieldOfView):
@@ -377,17 +575,22 @@ class GL:
             [0.,0.,0.,1.],
             ])
 
-        rotation_matrix = GL.calculate_rotation_matrix(rotation[:3],rotation[3])
+        if rotation is not None:
+            rotation_matrix = GL.calculate_rotation_matrix(rotation[:3],rotation[3])
+        else:
+            rotation_matrix = np.identity(4)
 
         # Correct the order of transformations
         transform_matrix = translation_matrix @ rotation_matrix @ scale_matrix
 
         GL.transform_stack.append(transform_matrix)
+        GL.normals_transform_stack.append(rotation_matrix)
 
     @staticmethod
     def transform_out():
         """Função usada para renderizar (na verdade coletar os dados) de Transform."""
         GL.transform_stack.pop()
+        GL.normals_transform_stack.pop()
 
     @staticmethod
     def triangleStripSet(point, stripCount, colors):
@@ -438,13 +641,57 @@ class GL:
         print("Box : size = {0}".format(size)) # imprime no terminal pontos
         print("Box : colors = {0}".format(colors)) # imprime no terminal as cores
 
-        gpu.GPU.draw_pixel([10, 10], gpu.GPU.RGB8, [255, 255, 255])  # altera pixel
+        scale_x, scale_y, scale_z = size
+        vertices = [
+            # Front face
+            -scale_x / 2, -scale_y / 2, scale_z / 2,
+            scale_x / 2, -scale_y / 2, scale_z / 2,
+            scale_x / 2, scale_y / 2, scale_z / 2,
+            -scale_x / 2, scale_y / 2, scale_z / 2,
+            # Back face
+            -scale_x / 2, -scale_y / 2, -scale_z / 2,
+            scale_x / 2, -scale_y / 2, -scale_z / 2,
+            scale_x / 2, scale_y / 2, -scale_z / 2,
+            -scale_x / 2, scale_y / 2, -scale_z / 2,
+        ]
+
+        # Define the 12 triangles of the box
+        triangles = [
+            # Front face
+            0, 1, 2,
+            0, 2, 3,
+            # Back face
+            4, 6, 5,
+            4, 7, 6,
+            # Top face
+            3, 2, 6,
+            3, 6, 7,
+            # Bottom face
+            0, 4, 1,
+            1, 4, 5,
+            # Right face
+            1, 5, 2,
+            2, 5, 6,
+            # Left face
+            0, 3, 7,
+            0, 7, 4,
+        ]
+        GL.indexedTriangleStripSet(vertices, triangles, colors)
+
+
 
     @staticmethod
     def indexedFaceSet(coord, coordIndex, colorPerVertex, color, colorIndex,
                        texCoord, texCoordIndex, colors, current_texture):
-        """Function used to render IndexedFaceSet."""
-        #modificado pelo GPT. Nao sei porque nao funcionava, nao sei porque funciona. Se der no antiplagio culpe Sam Altman
+        """Function used to render IndexedFaceSet with texture mapping."""
+
+        # Load the texture image if not already loaded
+        if current_texture:
+            GL.texture = gpu.GPU.load_texture(current_texture[0])
+            GL.texture_mipmap = generate_mipmap(GL.texture)
+        else:
+            GL.texture = None
+
         # Process coordIndex into faces
         faces = []
         current_face = []
@@ -458,34 +705,32 @@ class GL:
         if current_face:
             faces.append(current_face)
 
-        # If colorPerVertex is True and colorIndex is provided, process colorIndex similarly
-        if colorPerVertex and colorIndex:
-            color_faces = []
-            current_color_face = []
-            for idx in colorIndex:
+        # Process texCoordIndex into texture coordinate indices
+        if texCoordIndex:
+            tex_faces = []
+            current_tex_face = []
+            for idx in texCoordIndex:
                 if idx == -1:
-                    if current_color_face:
-                        color_faces.append(current_color_face)
-                    current_color_face = []
+                    if current_tex_face:
+                        tex_faces.append(current_tex_face)
+                    current_tex_face = []
                 else:
-                    current_color_face.append(idx)
-            if current_color_face:
-                color_faces.append(current_color_face)
+                    current_tex_face.append(idx)
+            if current_tex_face:
+                tex_faces.append(current_tex_face)
         else:
-            color_faces = None
+            tex_faces = None
 
         # Process each face
         for face_idx, face in enumerate(faces):
             if len(face) < 3:
                 continue  # Need at least 3 vertices to form a polygon
 
-            # Get the corresponding color indices for this face
-            if colorPerVertex:
-                if color_faces:
-                    color_face = color_faces[face_idx]
-                else:
-                    # If colorIndex is empty, use coordIndex
-                    color_face = face
+            # Get the corresponding texture indices for this face
+            if tex_faces:
+                tex_face = tex_faces[face_idx]
+            else:
+                tex_face = None
 
             # Triangulate the face using the fan method
             v0 = face[0]
@@ -501,30 +746,103 @@ class GL:
                     z = coord[3 * vi + 2]
                     coords.extend([x, y, z])
 
+                # Get the texture coordinates for the vertices
+                if texCoord and tex_face:
+                    t0 = texCoord[2 * tex_face[0]:2 * tex_face[0] + 2]
+                    t1 = texCoord[2 * tex_face[i]:2 * tex_face[i] + 2]
+                    t2 = texCoord[2 * tex_face[i + 1]:2 * tex_face[i + 1] + 2]
+                    texCoords = [t0, t1, t2]
+                else:
+                    texCoords = None
+
                 # Handle per-vertex colors
                 if colorPerVertex:
-                    tri_vertex_colors = []
-                    for idx_in_face, vi in enumerate([v0, v1, v2]):
-                        # Get the color index
-                        if color_faces:
-                            # Use the color indices from color_faces
-                            ci = color_face[idx_in_face]
-                        else:
-                            ci = vi  # Use vertex index as color index if colorIndex is empty
+                    # Similar handling for vertex colors as before
+                    pass  # Implement color handling if needed
 
-                        start = ci * 3
-                        rgb = color[start:start + 3]
-                        tri_vertex_colors.append([int(c * 255) for c in rgb])
+                GL.triangleSet(coords, colors, texCoord=texCoords, texture=GL.texture)
 
-                    GL.triangleSet(coords, colors, colorPerVertex=True, vertexColors=tri_vertex_colors)
-                else:
-                    GL.triangleSet(coords, colors)
     @staticmethod
     def sphere(radius, colors):
         """Função usada para renderizar Esferas."""
         print("Sphere : radius = {0}".format(radius)) # imprime no terminal o raio da esfera
         print("Sphere : colors = {0}".format(colors)) # imprime no terminal as cores
+        segments = 20  # Define um valor fixo de segmentos para a esfera
+        vertices = []
+        triangles = []
 
+        for i in range(segments + 1):
+            theta = i * math.pi / segments  # de 0 a pi
+            for j in range(segments + 1):
+                phi = j * 2 * math.pi / segments  # de 0 a 2pi
+                x = radius * math.sin(theta) * math.cos(phi)
+                y = radius * math.sin(theta) * math.sin(phi)
+                z = radius * math.cos(theta)
+                vertices.extend([x, y, z])
+
+                if i < segments and j < segments:
+                    first = i * (segments + 1) + j
+                    second = first + segments + 1
+                    triangles.extend([first, second, first + 1, second, second + 1, first + 1])
+
+        GL.indexedTriangleStripSet(vertices, triangles, colors)
+
+    @staticmethod
+    def cone(bottomRadius, height, colors):
+        """Função usada para renderizar Cones."""
+        print("Cone: bottomRadius = {0}, height = {1}".format(bottomRadius, height))  # imprime no terminal o raio e altura
+        print("Cone: colors = {0}".format(colors))  # imprime no terminal as cores
+
+        segments = 20  # Define um valor fixo de segmentos para o cone
+        vertices = [0, height / 2, 0]  # vértice do topo do cone
+        triangles = []
+
+        for i in range(segments):
+            theta = i * 2 * math.pi / segments
+            x = bottomRadius * math.cos(theta)
+            z = bottomRadius * math.sin(theta)
+            vertices.extend([x, -height / 2, z])
+
+        for i in range(1, segments):
+            triangles.extend([0, i, i + 1])
+        triangles.extend([0, segments, 1])  # fecha a base
+
+        GL.indexedTriangleStripSet(vertices, triangles, colors)
+
+    @staticmethod
+    def cylinder(radius, height, colors):
+        """Função usada para renderizar Cilindros."""
+        print("Cylinder: radius = {0}, height = {1}".format(radius, height))  # imprime no terminal o raio e altura
+        print("Cylinder: colors = {0}".format(colors))  # imprime no terminal as cores
+
+        segments = 12  # Define um valor fixo de segmentos para o cilindro
+        vertices = []
+        triangles = []
+
+        # Cria os vértices para os dois círculos da base
+        for i in range(segments):
+            theta = i * 2 * math.pi / segments
+            x = radius * math.cos(theta)
+            z = radius * math.sin(theta)
+            vertices.extend([x, -height / 2, z])  # círculo inferior
+            vertices.extend([x, height / 2, z])  # círculo superior
+
+        # Cria os triângulos das faces laterais
+        for i in range(segments):
+            lower1 = 2 * i
+            upper1 = lower1 + 1
+            lower2 = 2 * ((i + 1) % segments)
+            upper2 = lower2 + 1
+            triangles.extend([lower1, upper1, lower2, upper1, upper2, lower2])
+
+        # Cria as tampas inferior e superior
+        for i in range(1, segments - 1):
+            # Inferior
+            triangles.extend([0, 2 * i, 2 * (i + 1)])
+            # Superior
+            triangles.extend([1, 2 * (i + 1) + 1, 2 * i + 1])
+
+        GL.indexedTriangleStripSet(vertices, triangles, colors)
     @staticmethod
     def navigationInfo(headlight):
         """Características físicas do avatar do visualizador e do modelo de visualização."""
@@ -537,6 +855,13 @@ class GL:
         print("DirectionalLight : color = {0}".format(color)) # imprime no terminal
         print("DirectionalLight : intensity = {0}".format(intensity)) # imprime no terminal
         print("DirectionalLight : direction = {0}".format(direction)) # imprime no terminal
+        GL.light["ambientLight"] = True
+        GL.light["directionalLight"] = False
+        GL.light["light_color"] = color
+        GL.light["light_intensity"] = intensity
+        GL.light["light_ambient_intensity"] = ambientIntensity
+        GL.light["light_direction"] = direction
+
 
     @staticmethod
     def pointLight(ambientIntensity, color, intensity, location):
@@ -545,6 +870,12 @@ class GL:
         print("PointLight : color = {0}".format(color)) # imprime no terminal
         print("PointLight : intensity = {0}".format(intensity)) # imprime no terminal
         print("PointLight : location = {0}".format(location)) # imprime no terminal
+        GL.light["ambientLight"] = False
+        GL.light["directionalLight"] = True
+        GL.light["light_color"] = color
+        GL.light["light_intensity"] = intensity
+        GL.light["light_ambient_intensity"] = ambientIntensity
+        GL.light["light_point"] = location
 
     @staticmethod
     def fog(visibilityRange, color):
@@ -554,37 +885,99 @@ class GL:
 
     @staticmethod
     def timeSensor(cycleInterval, loop):
-        """Gera eventos conforme o tempo passa."""
-        print("TimeSensor : cycleInterval = {0}".format(cycleInterval)) # imprime no terminal
-        print("TimeSensor : loop = {0}".format(loop))
 
-        epoch = time.time()  # time in seconds since the epoch as a floating point number.
-        fraction_changed = (epoch % cycleInterval) / cycleInterval
+        GL.supersampling_buffer = np.zeros((GL.width*2, GL.height*2, 3), dtype=np.uint8)
+        GL.z_buffer = np.full((GL.width * 2, GL.height * 2), -np.inf)
 
-        return fraction_changed
+        # Esse método já está implementado para os alunos como exemplo
+        epoch = (time.time())  # time in seconds since the epoch as a floating point number.
+        if loop:
+            relative_time = ((epoch - GL.start_time) % cycleInterval) / cycleInterval
+        else:
+            relative_time = np.clip(epoch - GL.start_time / cycleInterval, 0, 1)
 
-    @staticmethod
     def splinePositionInterpolator(set_fraction, key, keyValue, closed):
         """Interpola não linearmente entre uma lista de vetores 3D."""
-        print("SplinePositionInterpolator : set_fraction = {0}".format(set_fraction))
-        print("SplinePositionInterpolator : key = {0}".format(key)) # imprime no terminal
-        print("SplinePositionInterpolator : keyValue = {0}".format(keyValue))
-        print("SplinePositionInterpolator : closed = {0}".format(closed))
+        key = np.array(key)
+        keyValue = np.array(keyValue)
 
-        value_changed = [0.0, 0.0, 0.0]
+        k_i_before = 0
+        for k_i_before in range(len(key) - 1): # Find the key interval
+            if key[k_i_before] <= set_fraction <= key[k_i_before + 1]:
+                k_i_before = k_i_before
+                k_i_plus = k_i_before + 1
+                break
+
+        key_value_parsed = keyValue.reshape(-1, 3)
+        #print(f"SplinePositionInterpolator : key_value_parsed = \n{key_value_parsed}")
+
+        if set_fraction == key[k_i_before]:
+            return key_value_parsed[k_i_before:k_i_before+1]
+        if set_fraction == key[k_i_plus]:
+            return key_value_parsed[k_i_plus:k_i_plus+1]
         
-        return value_changed
+        delta_key = key[k_i_plus] - key[k_i_before]
+        s = (set_fraction - key[k_i_before])/delta_key
+        s_m = np.array([
+            s**3,
+            s**2,
+            s,
+            1
+        ])
 
+        # Handle boundary cases for deriv_0
+        if k_i_before == 0:
+            if closed:
+                deriv_0 = (key_value_parsed[-1] - key_value_parsed[1]) * 0.5
+            else:
+                deriv_0 = np.array([0, 0, 0])
+        else:
+            deriv_0 = (key_value_parsed[k_i_before-1] - key_value_parsed[k_i_before+1]) * 0.5
+
+
+        # Handle boundary cases for delta_value_1
+        if k_i_plus == len(key) - 1:
+            if closed:
+                deriv_1 = (key_value_parsed[0] - key_value_parsed[-2]) * 0.5
+            else:
+                deriv_1 = np.array([0, 0, 0])
+        else:
+            deriv_1 = (key_value_parsed[k_i_plus-1] - key_value_parsed[k_i_plus+1]) * 0.5
+
+        
+
+        c = np.array([
+            key_value_parsed[k_i_before],
+            key_value_parsed[k_i_plus],
+            deriv_0,
+            deriv_1
+        ])
+
+        # print(f"SplinePositionInterpolator : k_i_before = {k_i_before}")
+        # print(f"SplinePositionInterpolator : k_i_plus = {k_i_plus}")
+        # print(f"SplinePositionInterpolator : set_fraction = {set_fraction}")
+        # print(f"SplinePositionInterpolator : key = {key}")
+        # print(f"SplinePositionInterpolator : keyValue = {keyValue}")
+        # print(f"SplinePositionInterpolator : closed = {closed}")
+        # print(f"SplinePositionInterpolator : c = \n{c}")
+
+        # Calcular a interpolação
+        value_changed = s_m @ np.array([
+        [ 2, -2,  1,  1],
+        [-3,  3, -2, -1],
+        [ 0,  0,  1,  0],
+        [ 1,  0,  0,  0]
+    ]) @ c
+
+        #print(f"SplinePositionInterpolator : value_changed = \n{value_changed}")
+
+        return value_changed
     @staticmethod
     def orientationInterpolator(set_fraction, key, keyValue):
-        """Interpola entre uma lista de valores de rotação especificos."""
+        """ print(f"OrientationInterpolator : key_value_parsed = \n{key_value_parsed}")
         print("OrientationInterpolator : set_fraction = {0}".format(set_fraction))
-        print("OrientationInterpolator : key = {0}".format(key)) # imprime no terminal
-        print("OrientationInterpolator : keyValue = {0}".format(keyValue))
-
-        value_changed = [0, 0, 1, 0]
-
-        return value_changed
+        print("OrientationInterpolator : key = {0}".format(key))
+        print("OrientationInterpolator : keyValue = {0}".format(keyValue)) """
 
     def vertex_shader(self, shader):
         """Para no futuro implementar um vertex shader."""
