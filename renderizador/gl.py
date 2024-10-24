@@ -18,30 +18,60 @@ import gpu          # Simula os recursos de uma GPU
 import math         # Funções matemáticas
 import numpy as np  # Biblioteca do Numpy
 
-def slerp(rotation_before, rotation_after, t):
-    """Performs spherical linear interpolation (SLERP) between two rotations."""
-    # Extract the axis and angle components
-    axis_before = rotation_before[:3]
-    angle_before = rotation_before[3]
+#helper function dadas pelo gpt
+def axis_angle_to_quaternion(axis_angle):
+    """Converts an axis-angle rotation to a quaternion."""
+    axis = np.array(axis_angle[:3], dtype=float)
+    angle = axis_angle[3]
+    axis_norm = np.linalg.norm(axis)
+    if axis_norm == 0:
+        # If the axis is zero, return a default quaternion
+        return np.array([1, 0, 0, 0])
+    axis = axis / axis_norm
+    sin_half_angle = np.sin(angle / 2.0)
+    cos_half_angle = np.cos(angle / 2.0)
+    return np.concatenate(([cos_half_angle], axis * sin_half_angle))
 
-    axis_after = rotation_after[:3]
-    angle_after = rotation_after[3]
+def quaternion_to_axis_angle(q):
+    """Converts a quaternion back to axis-angle representation."""
+    q = q / np.linalg.norm(q)
+    qw, qx, qy, qz = q
+    angle = 2 * np.arccos(qw)
+    sin_half_angle = np.sqrt(1 - qw * qw)
+    if sin_half_angle < 1e-6:
+        # If angle is close to 0, axis direction is arbitrary
+        axis = np.array([1, 0, 0])
+    else:
+        axis = np.array([qx, qy, qz]) / sin_half_angle
+    return np.concatenate((axis, [angle]))
 
-    # Calculate the shortest path between the two angles
-    # Normalize the rotation axes (just in case)
-    axis_before = axis_before / np.linalg.norm(axis_before)
-    axis_after = axis_after / np.linalg.norm(axis_after)
+def slerp(q0, q1, t):
+    """Performs Spherical Linear Interpolation (SLERP) between two quaternions."""
+    dot = np.dot(q0, q1)
 
-    # Ensure the two axes are aligned for interpolation (they should be for rotations)
-    if not np.allclose(axis_before, axis_after):
-        print("Warning: Axes are not aligned. Interpolating using axis of first keyframe.")
-        axis_after = axis_before
+    # If the dot product is negative, slerp won't take
+    # the shorter path. Note that q and -q represent the same rotation.
+    if dot < 0.0:
+        q1 = -q1
+        dot = -dot
 
-    # Perform linear interpolation on the angle component (SLERP for angle)
-    interpolated_angle = (1 - t) * angle_before + t * angle_after
+    DOT_THRESHOLD = 0.9995
+    if dot > DOT_THRESHOLD:
+        # If the inputs are too close for comfort, linearly interpolate
+        result = q0 + t * (q1 - q0)
+        result = result / np.linalg.norm(result)
+        return result
 
-    # Return the interpolated rotation (axis remains the same, only the angle changes)
-    return np.hstack([axis_before, interpolated_angle])
+    # Since dot is in range [0, DOT_THRESHOLD], acos is safe
+    theta_0 = np.arccos(dot)        # theta_0 = angle between input vectors
+    sin_theta_0 = np.sin(theta_0)   # compute once and reuse
+    theta = theta_0 * t             # theta = angle between q0 and result
+    sin_theta = np.sin(theta)
+
+    s0 = np.cos(theta) - dot * sin_theta / sin_theta_0  # == sin(theta_0 - theta) / sin(theta_0)
+    s1 = sin_theta / sin_theta_0
+
+    return (s0 * q0) + (s1 * q1)
 ## agradecimentos especiais a pedro barao por me forneces essa merda
 def t_area(p0,p1,p2):
     x1,y1 = p0
@@ -276,6 +306,7 @@ class GL:
             texture_image = texture
 
         color = np.array(colors["emissiveColor"]) * 255
+        #print(color)
 
         z_index = 0
         for i in range(0, len(vertices), 6):
@@ -335,7 +366,6 @@ class GL:
                             alpha, beta, gamma = t_bar_coords(s_p1, s_p2, s_p3, [s_px, s_py])
                             if alpha < 0 or beta < 0 or gamma < 0:
                                 continue
-
 
                             z = 1/(alpha * z1 + beta * z2 + gamma * z3)
                             if z < GL.z_buffer[x][y]:
@@ -428,10 +458,9 @@ class GL:
                                         GL.supersampling_buffer[x][y] = color
                                     normal_color = [int((c + 1)*0.5*255) for c in normals]
                                     #GL.supersampling_buffer[x][y] = normal_color
-                                    #GL.supersampling_buffer[x][y] = color
+                                    GL.supersampling_buffer[x][y] = color
                                 else:
                                     GL.supersampling_buffer[x][y] = color
-
 
             for x in range(bounding_box[0], bounding_box[1] + 1):
                 for y in range(bounding_box[2], bounding_box[3] + 1):
@@ -882,10 +911,6 @@ class GL:
     @staticmethod
     def directionalLight(ambientIntensity, color, intensity, direction):
         """Luz direcional ou paralela."""
-        print("DirectionalLight : ambientIntensity = {0}".format(ambientIntensity))
-        print("DirectionalLight : color = {0}".format(color)) # imprime no terminal
-        print("DirectionalLight : intensity = {0}".format(intensity)) # imprime no terminal
-        print("DirectionalLight : direction = {0}".format(direction)) # imprime no terminal
         GL.light["ambientLight"] = True
         GL.light["directionalLight"] = False
         GL.light["light_color"] = color
@@ -897,10 +922,6 @@ class GL:
     @staticmethod
     def pointLight(ambientIntensity, color, intensity, location):
         """Luz pontual."""
-        print("PointLight : ambientIntensity = {0}".format(ambientIntensity))
-        print("PointLight : color = {0}".format(color)) # imprime no terminal
-        print("PointLight : intensity = {0}".format(intensity)) # imprime no terminal
-        print("PointLight : location = {0}".format(location)) # imprime no terminal
         GL.light["ambientLight"] = False
         GL.light["directionalLight"] = True
         GL.light["light_color"] = color
@@ -916,41 +937,110 @@ class GL:
 
     @staticmethod
     def timeSensor(cycleInterval, loop):
-        """Gera eventos conforme o tempo passa."""
-        # https://www.web3d.org/specifications/X3Dv4/ISO-IEC19775-1v4-IS/Part01/components/time.html#TimeSensor
-        # Os nós TimeSensor podem ser usados para muitas finalidades, incluindo:
-        # Condução de simulações e animações contínuas; Controlar atividades periódicas;
-        # iniciar eventos de ocorrência única, como um despertador;
-        # Se, no final de um ciclo, o valor do loop for FALSE, a execução é encerrada.
-        # Por outro lado, se o loop for TRUE no final de um ciclo, um nó dependente do
-        # tempo continua a execução no próximo ciclo. O ciclo de um nó TimeSensor dura
-        # cycleInterval segundos. O valor de cycleInterval deve ser maior que zero.
-
-        # Deve retornar a fração de tempo passada em fraction_changed
-
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print(
-            "TimeSensor : cycleInterval = {0}".format(cycleInterval)
-        )  # imprime no terminal
-        print("TimeSensor : loop = {0}".format(loop))
-
-        # Esse método já está implementado para os alunos como exemplo
-        GL.super_buffer = np.zeros((GL.width*2, GL.height*2, 3), dtype=np.uint8)
-        GL.z_buffer =  - np.inf * np.ones((GL.width*2, GL.height*2)) 
-        epoch = (
-            time.time()
-        )  # time in seconds since the epoch as a floating point number.
-        fraction_changed = (epoch % cycleInterval) / cycleInterval
+        """Generates events as time passes, providing the fraction of the cycle completed."""
+        # Initialize buffers for the new frame
+        GL.supersampling_buffer = np.zeros((GL.width * 2, GL.height * 2, 3), dtype=np.uint8)
+        GL.z_buffer = np.inf*np.ones((GL.width*2, GL.height*2))
 
 
+        # Get the current time since the epoch
+        current_time = time.time()
+
+        # Initialize start_time if not already set
+        if not hasattr(GL, 'start_time'):
+            GL.start_time = current_time
+
+        # Calculate the elapsed time since the animation started
+        elapsed_time = current_time - GL.start_time
+
+        # Calculate the fraction of the cycle that has completed
+        if loop:
+            fraction_changed = (elapsed_time % cycleInterval) / cycleInterval
+        else:
+            fraction_changed = min(elapsed_time / cycleInterval, 1.0)
 
         return fraction_changed
 
     @staticmethod
     def splinePositionInterpolator(set_fraction, key, keyValue, closed):
-        return 
+        """Interpolates positions non-linearly between a list of 3D vectors using Hermite splines."""
+        key = np.array(key)
+        keyValue = np.array(keyValue).reshape(-1, 3)
+
+        # Find the interval [k0, k1] where set_fraction lies
+        for i in range(len(key) - 1):
+            if key[i] <= set_fraction <= key[i + 1]:
+                k0, k1 = i, i + 1
+                break
+        else:
+            # If set_fraction is outside the keys, clamp to the last interval
+            k0, k1 = len(key) - 2, len(key) - 1
+
+        # Calculate the parameter t in [0, 1]
+        t = (set_fraction - key[k0]) / (key[k1] - key[k0])
+
+        # Handle tangents for closed and open curves
+        if closed:
+            prev_index = (k0 - 1) % len(key)
+            next_index = (k1 + 1) % len(key)
+        else:
+            prev_index = max(k0 - 1, 0)
+            next_index = min(k1 + 1, len(key) - 1)
+
+        # Control points and tangents
+        p0 = keyValue[k0]
+        p1 = keyValue[k1]
+        m0 = 0.5 * (keyValue[k1] - keyValue[prev_index])
+        m1 = 0.5 * (keyValue[next_index] - keyValue[k0])
+
+        # Hermite basis functions
+        h00 = 2 * t**3 - 3 * t**2 + 1
+        h10 = t**3 - 2 * t**2 + t
+        h01 = -2 * t**3 + 3 * t**2
+        h11 = t**3 - t**2
+
+        # Compute the interpolated position
+        value_changed = h00 * p0 + h10 * m0 + h01 * p1 + h11 * m1
+
+        return value_changed.tolist()
+
+    @staticmethod
     def orientationInterpolator(set_fraction, key, keyValue):
-        return
+        """Interpolates between rotation values using spherical linear interpolation (SLERP)."""
+        key = np.array(key)
+        keyValue = np.array(keyValue).reshape(-1, 4)
+
+        # Handle boundary cases where set_fraction is outside the key range
+        if set_fraction <= key[0]:
+            k0, k1 = 0, 0
+            t = 0.0
+        elif set_fraction >= key[-1]:
+            k0, k1 = len(key) - 1, len(key) - 1
+            t = 0.0
+        else:
+            # Find the interval [k0, k1] where set_fraction lies
+            for i in range(len(key) - 1):
+                if key[i] <= set_fraction <= key[i + 1]:
+                    k0, k1 = i, i + 1
+                    break
+            # Calculate the parameter t in [0, 1]
+            t = (set_fraction - key[k0]) / (key[k1] - key[k0])
+
+        # Get the rotations at the two keyframes
+        rotation_before = keyValue[k0]
+        rotation_after = keyValue[k1]
+
+        # Convert axis-angle rotations to quaternions
+        q0 = axis_angle_to_quaternion(rotation_before)
+        q1 = axis_angle_to_quaternion(rotation_after)
+
+        # Perform SLERP between q0 and q1
+        interpolated_quaternion = slerp(q0, q1, t)
+
+        # Convert the interpolated quaternion back to axis-angle representation
+        value_changed = quaternion_to_axis_angle(interpolated_quaternion)
+
+        return value_changed.tolist()
 
     def vertex_shader(self, shader):
         """Para no futuro implementar um vertex shader."""
