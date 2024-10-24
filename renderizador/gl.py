@@ -18,7 +18,30 @@ import gpu          # Simula os recursos de uma GPU
 import math         # Funções matemáticas
 import numpy as np  # Biblioteca do Numpy
 
+def slerp(rotation_before, rotation_after, t):
+    """Performs spherical linear interpolation (SLERP) between two rotations."""
+    # Extract the axis and angle components
+    axis_before = rotation_before[:3]
+    angle_before = rotation_before[3]
 
+    axis_after = rotation_after[:3]
+    angle_after = rotation_after[3]
+
+    # Calculate the shortest path between the two angles
+    # Normalize the rotation axes (just in case)
+    axis_before = axis_before / np.linalg.norm(axis_before)
+    axis_after = axis_after / np.linalg.norm(axis_after)
+
+    # Ensure the two axes are aligned for interpolation (they should be for rotations)
+    if not np.allclose(axis_before, axis_after):
+        print("Warning: Axes are not aligned. Interpolating using axis of first keyframe.")
+        axis_after = axis_before
+
+    # Perform linear interpolation on the angle component (SLERP for angle)
+    interpolated_angle = (1 - t) * angle_before + t * angle_after
+
+    # Return the interpolated rotation (axis remains the same, only the angle changes)
+    return np.hstack([axis_before, interpolated_angle])
 ## agradecimentos especiais a pedro barao por me forneces essa merda
 def t_area(p0,p1,p2):
     x1,y1 = p0
@@ -97,16 +120,14 @@ def calculate_color(material_emissive_color,
     ambient = light_ambient_intensity*np.array(material_diffuse_color)*material_ambientIntensity
     diffuse = light_intensity*np.array(material_diffuse_color)*(np.dot(normal_direction,light_direction))
     dot_camera_and_point = np.dot(normal_direction,(light_direction+point_to_viewer_normalized)/np.linalg.norm(light_direction + point_to_viewer_normalized))
-    print(dot_camera_and_point)
+    #print(dot_camera_and_point)
     specular = light_intensity*np.array(material_specular_color)*(dot_camera_and_point**(shininess*128))
-        
+    specular = np.nan_to_num(specular, nan=0.0)
+       
 
-    if specular[0] > 0.1:
-        print(specular)
-        print(dot_camera_and_point)
     #print(f"ambient: {ambient} \n diffuse:{diffuse} \n specular:{specular}")
+
     I_rgb = np.array(material_emissive_color) + light_color*(ambient + diffuse + specular)
-    #print(I_rgb)
     return np.clip(I_rgb*256,0,255)
 
 class GL:
@@ -240,7 +261,6 @@ class GL:
         """Função usada para renderizar TriangleSet2D."""
 
 
-        #print(z_vals)
         if len(vertices) < 5:
             print("ERROR NO TRIANGLES SENT")
             return
@@ -896,65 +916,42 @@ class GL:
 
     @staticmethod
     def timeSensor(cycleInterval, loop):
+        """Gera eventos conforme o tempo passa."""
+        # https://www.web3d.org/specifications/X3Dv4/ISO-IEC19775-1v4-IS/Part01/components/time.html#TimeSensor
+        # Os nós TimeSensor podem ser usados para muitas finalidades, incluindo:
+        # Condução de simulações e animações contínuas; Controlar atividades periódicas;
+        # iniciar eventos de ocorrência única, como um despertador;
+        # Se, no final de um ciclo, o valor do loop for FALSE, a execução é encerrada.
+        # Por outro lado, se o loop for TRUE no final de um ciclo, um nó dependente do
+        # tempo continua a execução no próximo ciclo. O ciclo de um nó TimeSensor dura
+        # cycleInterval segundos. O valor de cycleInterval deve ser maior que zero.
 
-        GL.supersampling_buffer = np.zeros((GL.width*2, GL.height*2, 3), dtype=np.uint8)
-        GL.z_buffer = np.full((GL.width * 2, GL.height * 2), np.inf)
+        # Deve retornar a fração de tempo passada em fraction_changed
+
+        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
+        print(
+            "TimeSensor : cycleInterval = {0}".format(cycleInterval)
+        )  # imprime no terminal
+        print("TimeSensor : loop = {0}".format(loop))
 
         # Esse método já está implementado para os alunos como exemplo
-        epoch = (time.time())  # time in seconds since the epoch as a floating point number.
-        if loop:
-            relative_time = ((epoch - GL.start_time) % cycleInterval) / cycleInterval
-        else:
-            relative_time = np.clip(epoch - GL.start_time / cycleInterval, 0, 1)
+        GL.super_buffer = np.zeros((GL.width*2, GL.height*2, 3), dtype=np.uint8)
+        GL.z_buffer =  - np.inf * np.ones((GL.width*2, GL.height*2)) 
+        epoch = (
+            time.time()
+        )  # time in seconds since the epoch as a floating point number.
+        fraction_changed = (epoch % cycleInterval) / cycleInterval
 
+
+
+        return fraction_changed
 
     @staticmethod
     def splinePositionInterpolator(set_fraction, key, keyValue, closed):
-        """Interpola não linearmente entre uma lista de vetores 3D."""
-        # https://www.web3d.org/specifications/X3Dv4/ISO-IEC19775-1v4-IS/Part01/components/interpolators.html#SplinePositionInterpolator
-        # Interpola não linearmente entre uma lista de vetores 3D. O campo keyValue possui
-        # uma lista com os valores a serem interpolados, key possui uma lista respectiva de chaves
-        # dos valores em keyValue, a fração a ser interpolada vem de set_fraction que varia de
-        # zeroa a um. O campo keyValue deve conter exatamente tantos vetores 3D quanto os
-        # quadros-chave no key. O campo closed especifica se o interpolador deve tratar a malha
-        # como fechada, com uma transições da última chave para a primeira chave. Se os keyValues
-        # na primeira e na última chave não forem idênticos, o campo closed será ignorado.
-
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("SplinePositionInterpolator : set_fraction = {0}".format(set_fraction))
-        print("SplinePositionInterpolator : key = {0}".format(key)) # imprime no terminal
-        print("SplinePositionInterpolator : keyValue = {0}".format(keyValue))
-        print("SplinePositionInterpolator : closed = {0}".format(closed))
-
-        # Abaixo está só um exemplo de como os dados podem ser calculados e transferidos
-        value_changed = [0.0, 0.0, 0.0]
-        
-        return value_changed
-
-    @staticmethod
+        return 
     def orientationInterpolator(set_fraction, key, keyValue):
-        """Interpola entre uma lista de valores de rotação especificos."""
-        # https://www.web3d.org/specifications/X3Dv4/ISO-IEC19775-1v4-IS/Part01/components/interpolators.html#OrientationInterpolator
-        # Interpola rotações são absolutas no espaço do objeto e, portanto, não são cumulativas.
-        # Uma orientação representa a posição final de um objeto após a aplicação de uma rotação.
-        # Um OrientationInterpolator interpola entre duas orientações calculando o caminho mais
-        # curto na esfera unitária entre as duas orientações. A interpolação é linear em
-        # comprimento de arco ao longo deste caminho. Os resultados são indefinidos se as duas
-        # orientações forem diagonalmente opostas. O campo keyValue possui uma lista com os
-        # valores a serem interpolados, key possui uma lista respectiva de chaves
-        # dos valores em keyValue, a fração a ser interpolada vem de set_fraction que varia de
-        # zeroa a um. O campo keyValue deve conter exatamente tantas rotações 3D quanto os
-        # quadros-chave no key.
+        return
 
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("OrientationInterpolator : set_fraction = {0}".format(set_fraction))
-        print("OrientationInterpolator : key = {0}".format(key)) # imprime no terminal
-        print("OrientationInterpolator : keyValue = {0}".format(keyValue))
-
-        # Abaixo está só um exemplo de como os dados podem ser calculados e transferidos
-        value_changed = [0, 0, 1, 0]
-
-        return value_changed
     def vertex_shader(self, shader):
         """Para no futuro implementar um vertex shader."""
 

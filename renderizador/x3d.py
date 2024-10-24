@@ -1096,6 +1096,7 @@ class X3DInterpolatorNode(X3DChildNode):
         self.key = MFFloat(node, "key", [])  # MF<type>     [in,out] keyValue      []
         self.keyValue = MFFloat(node, "keyValue", None)
         self.value_changed = None  #   [S|M]F<type> [out]    value_changed
+        print("a,",self.set_fraction)
 
 class SplinePositionInterpolator(X3DInterpolatorNode):
     """Interpola não linearmente entre uma lista de vetores 3D."""
