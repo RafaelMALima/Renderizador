@@ -90,15 +90,21 @@ def calculate_color(material_emissive_color,
                     point_to_viewer_normalized,
                     shininess):
 
+    #print(point_to_viewer_normalized)
     #light_direction = np.array([-a for a in light_direction])
     normal_direction = np.array([-a for a in normal_direction])
-    power = int(shininess*128)
+    #print(light_direction, point_to_viewer_normalized)
     ambient = light_ambient_intensity*np.array(material_diffuse_color)*material_ambientIntensity
     diffuse = light_intensity*np.array(material_diffuse_color)*(np.dot(normal_direction,light_direction))
-    specular = light_intensity*np.array(material_specular_color)*((np.dot(normal_direction,((light_direction+point_to_viewer_normalized)/abs(light_direction+point_to_viewer_normalized))))**(power))
-    specular = (0.0, 0.0, 0.0)
-    #print(material_emissive_color, material_diffuse_color, material_specular_color, material_ambientIntensity)
-    #print(ambient, diffuse, specular)
+    dot_camera_and_point = np.dot(normal_direction,(light_direction+point_to_viewer_normalized)/np.linalg.norm(light_direction + point_to_viewer_normalized))
+    print(dot_camera_and_point)
+    specular = light_intensity*np.array(material_specular_color)*(dot_camera_and_point**(shininess*128))
+        
+
+    if specular[0] > 0.1:
+        print(specular)
+        print(dot_camera_and_point)
+    #print(f"ambient: {ambient} \n diffuse:{diffuse} \n specular:{specular}")
     I_rgb = np.array(material_emissive_color) + light_color*(ambient + diffuse + specular)
     #print(I_rgb)
     return np.clip(I_rgb*256,0,255)
@@ -364,10 +370,10 @@ class GL:
                                     point_to_viewer = barycenter  - GL.position
                                     point_to_viewer_normalized= np.linalg.norm(point_to_viewer)
                                     if point_to_viewer_normalized!= 0:
-                                        point_to_viewer = point_to_viewer / point_to_viewer_normalized
+                                        point_to_viewer_normalized = point_to_viewer / point_to_viewer_normalized
                                     else:
                                         # Handle degenerate triangle (zero area)
-                                        normal = np.array([0.0, 0.0, 0.0])
+                                        point_to_viewer_normalized = np.array([0.0, 0.0, 0.0])
                                     if GL.light["ambientLight"]:
                                         light_direction = GL.light["light_direction"]
                                         color = calculate_color(colors["emissiveColor"],
